@@ -1,0 +1,22 @@
+name: CI check
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on: pull_request
+
+jobs:  
+  run_dart_unit_test:
+    name: Run dart unit test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: 2.17.1
+
+      - name: Run tests
+        run: |
+          dart pub get
+          dart test
