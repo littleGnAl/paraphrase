@@ -12,6 +12,44 @@ import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/error/error.dart' show AnalysisError;
 import 'package:analyzer/file_system/file_system.dart';
 
+extension _TypeAnnotationExt on TypeAnnotation {
+  String getName() {
+    String? returnName = type?.getDisplayString(withNullability: false);
+    if (returnName == null && this is NamedType) {
+      return (this as NamedType).name2.toString();
+    }
+    return toString();
+  }
+
+  Type toType() {
+    String typeInString = '';
+    List<Type> typeArguments = [];
+    List<Type> positionalFields = [];
+
+    if (this is NamedType) {
+      typeInString = getName();
+      typeArguments = (this as NamedType)
+              .typeArguments
+              ?.arguments
+              .map((ta) => ta.toType())
+              .toList() ??
+          [];
+    } else if (this is RecordTypeAnnotation) {
+      final actualTypeAnnotation = this as RecordTypeAnnotation;
+
+      positionalFields = actualTypeAnnotation.positionalFields.map((e) {
+        return e.type.toType();
+      }).toList();
+    }
+
+    return Type()
+      ..type = typeInString
+      ..isNullable = question != null
+      ..typeArguments = typeArguments
+      ..positionalFields = positionalFields;
+  }
+}
+
 class CallApiInvoke {
   late String apiType;
   late String params;
@@ -69,9 +107,12 @@ extension ParameterExt on Parameter {
 
 class Type {
   late String type;
-  List<String> typeArguments = [];
+  bool isNullable = false;
+  List<Type> typeArguments = [];
   // The parameters associated with the function type.
   List<Parameter> parameters = [];
+  // The positional fields of Dart records.
+  List<Type> positionalFields = [];
 }
 
 extension TypeExt on Type {
@@ -109,6 +150,10 @@ extension TypeExt on Type {
 
   bool isVoid() {
     return type == 'void';
+  }
+
+  bool isDartRecords() {
+    return positionalFields.isNotEmpty;
   }
 }
 
@@ -190,7 +235,9 @@ class ParseResult {
 
 extension ParseResultExt on ParseResult {
   bool hasEnum(String type) {
-    return enums.any((e) => e.name == type);
+    return enums.any((e) {
+      return e.name == type;
+    });
   }
 
   List<Enumz> getEnum(String type, {String? package}) {
@@ -293,7 +340,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
     if (clazz == null) return null;
 
     final dart_ast.TypeAnnotation? type = node.fields.type;
-    final fieldName = node.fields.variables[0].name.name;
+    final fieldName = node.fields.variables[0].name.toString();
     if (type is dart_ast.NamedType) {
       Field field = Field()
         ..name = fieldName
@@ -301,8 +348,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
         ..source = node.toString()
         ..uri = _currentVisitUri!;
 
-      Type t = Type()..type = type.name.name;
-      field.type = t;
+      field.type = type.toType();
 
       clazz.fields.add(field);
     } else if (type is dart_ast.GenericFunctionType) {
@@ -328,7 +374,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
     if (clazz == null) return null;
 
     Constructor constructor = Constructor()
-      ..name = node.name?.name ?? ''
+      ..name = node.name?.toString() ?? ''
       ..parameters = _getParameter(node.parent, node.parameters)
       ..isFactory = node.factoryKeyword != null
       ..isConst = node.constKeyword != null
@@ -342,14 +388,14 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
 
   @override
   Object? visitEnumDeclaration(EnumDeclaration node) {
-    final enumz = enumMap.putIfAbsent(node.name.name, () => Enumz());
-    enumz.name = node.name.name;
+    final enumz = enumMap.putIfAbsent(node.name.toString(), () => Enumz());
+    enumz.name = node.name.toString();
     enumz.comment = _generateComment(node);
     enumz.uri = _currentVisitUri!;
 
     for (final constant in node.constants) {
       EnumConstant enumConstant = EnumConstant()
-        ..name = '${node.name.name}.${constant.name.name}'
+        ..name = '${node.name.toString()}.${constant.name.toString()}'
         ..comment = _generateComment(constant)
         ..source = constant.toSource();
       enumz.enumConstants.add(enumConstant);
@@ -391,8 +437,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
             stderr.writeln(
                 'Not handled enum: ${enumz.name}, annotation type: ${a.runtimeType}');
           }
-          stderr.writeln(
-              ' handled enum: ${enumz.name}, annotation type: ${a.runtimeType}');
+
           simpleLiteral.type = type;
           simpleLiteral.value = value;
         }
@@ -411,9 +456,9 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
     }
 
     Clazz clazz = classMap.putIfAbsent(
-      '${_currentVisitUri.toString()}#${classNode.name.name}',
+      '${_currentVisitUri.toString()}#${classNode.name.toString()}',
       () => Clazz()
-        ..name = classNode.name.name
+        ..name = classNode.name.toString()
         ..comment = _generateComment(node as AnnotatedNode)
         ..uri = _currentVisitUri!,
     );
@@ -431,26 +476,20 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
       parameter.type = type;
 
       if (p is SimpleFormalParameter) {
-        parameter.name = p.identifier?.name ?? '';
+        parameter.name = p.name?.toString() ?? '';
         DartType? dartType = p.type?.type;
-
         parameter.dartType = dartType;
 
-        final namedType = p.type as NamedType;
-        for (final ta in namedType.typeArguments?.arguments ?? []) {
-          type.typeArguments.add(ta.name.name);
-        }
-
-        type.type = namedType.name.name;
+        parameter.type = p.type!.toType();
         parameter.isNamed = p.isNamed;
         parameter.isOptional = p.isOptional;
       } else if (p is DefaultFormalParameter) {
-        parameter.name = p.identifier?.name ?? '';
+        parameter.name = p.name?.toString() ?? '';
         parameter.defaultValue = p.defaultValue?.toSource();
 
         DartType? dartType;
         String? typeName;
-        List<String> typeArguments = [];
+        List<Type> typeArguments = [];
 
         if (p.parameter is SimpleFormalParameter) {
           final SimpleFormalParameter simpleFormalParameter =
@@ -459,11 +498,12 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
 
           if (simpleFormalParameter.type is NamedType) {
             final namedType = simpleFormalParameter.type as NamedType;
-            for (final ta in namedType.typeArguments?.arguments ?? []) {
-              typeArguments.add(ta.name.name);
+            for (final ta
+                in namedType.typeArguments?.arguments ?? <TypeAnnotation>[]) {
+              typeArguments.add(ta.toType());
             }
 
-            typeName = (simpleFormalParameter.type as NamedType).name.name;
+            typeName = (simpleFormalParameter.type as NamedType).getName();
           } else if (simpleFormalParameter.type is GenericFunctionType) {
             typeName = (simpleFormalParameter.type as GenericFunctionType)
                 .functionKeyword
@@ -483,18 +523,19 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
                 if (classMember is FieldDeclaration) {
                   final dart_ast.TypeAnnotation? fieldType =
                       classMember.fields.type;
-                  final fieldName = classMember.fields.variables[0].name.name;
+                  final fieldName =
+                      classMember.fields.variables[0].name.toString();
                   if (fieldType is dart_ast.NamedType) {
-                    if (fieldName == fieldFormalParameter.identifier.name) {
-                      typeName = fieldType.name.name;
-                      for (final ta
-                          in fieldType.typeArguments?.arguments ?? []) {
-                        typeArguments.add(ta.name.name);
+                    if (fieldName == fieldFormalParameter.name.toString()) {
+                      typeName = fieldType.getName();
+                      for (final ta in fieldType.typeArguments?.arguments ??
+                          <TypeAnnotation>[]) {
+                        typeArguments.add(ta.toType());
                       }
                       break;
                     }
                   } else if (fieldType is dart_ast.GenericFunctionType) {
-                    if (fieldName == fieldFormalParameter.identifier.name) {
+                    if (fieldName == fieldFormalParameter.name.toString()) {
                       typeName = fieldType.functionKeyword.stringValue;
                       type.parameters =
                           _getParameter(null, fieldType.parameters);
@@ -523,23 +564,24 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
         parameter.isOptional = p.isOptional;
       } else if (p is FieldFormalParameter) {
         String typeName = '';
-        List<String> typeArguments = [];
+        List<Type> typeArguments = [];
         if (root != null && root is ClassDeclaration) {
           for (final classMember in root.members) {
             if (classMember is FieldDeclaration) {
               final dart_ast.TypeAnnotation? fieldType =
                   classMember.fields.type;
-              final fieldName = classMember.fields.variables[0].name.name;
+              final fieldName = classMember.fields.variables[0].name.toString();
               if (fieldType is dart_ast.NamedType) {
-                if (fieldName == p.identifier.name) {
-                  typeName = fieldType.name.name;
-                  for (final ta in fieldType.typeArguments?.arguments ?? []) {
-                    typeArguments.add(ta.name.name);
+                if (fieldName == p.name.toString()) {
+                  typeName = fieldType.toString();
+                  for (final ta in fieldType.typeArguments?.arguments ??
+                      <TypeAnnotation>[]) {
+                    typeArguments.add(ta.toType());
                   }
                   break;
                 }
               } else if (fieldType is dart_ast.GenericFunctionType) {
-                if (fieldName == p.identifier.name) {
+                if (fieldName == p.type?.toString()) {
                   typeName = fieldType.functionKeyword.stringValue ?? '';
                   type.parameters = _getParameter(root, fieldType.parameters);
 
@@ -550,7 +592,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
           }
         }
 
-        parameter.name = p.identifier.name;
+        parameter.name = p.type?.toString() ?? '';
         parameter.dartType = p.type?.type;
         type.type = typeName;
         type.typeArguments.addAll(typeArguments);
@@ -615,7 +657,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
 
   Method _createMethod(MethodDeclaration node) {
     Method method = Method()
-      ..name = node.name.name
+      ..name = node.name.toString()
       ..source = node.toString()
       ..uri = _currentVisitUri!;
 
@@ -625,14 +667,8 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
       method.parameters.addAll(_getParameter(node.parent, node.parameters));
     }
 
-    if (node.returnType != null && node.returnType is NamedType) {
-      final returnType = node.returnType as NamedType;
-      method.returnType = Type()
-        ..type = returnType.name.name
-        ..typeArguments = returnType.typeArguments?.arguments
-                .map((ta) => (ta as NamedType).name.name)
-                .toList() ??
-            [];
+    if (node.returnType != null) {
+      method.returnType = node.returnType!.toType();
     }
 
     if (node.body is BlockFunctionBody) {
@@ -666,7 +702,7 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
     final parametersList = node.functionType?.parameters.parameters
             .map((e) {
               if (e is SimpleFormalParameter) {
-                return '${e.type} ${e.identifier?.name}';
+                return '${e.type} ${e.type?.toString()}';
               }
               return '';
             })
@@ -674,20 +710,19 @@ class DefaultVisitorImpl extends DefaultVisitor<Object?> {
             .toList() ??
         [];
 
-    genericTypeAliasParametersMap[node.name.name] = parametersList;
+    genericTypeAliasParametersMap[node.name.toString()] = parametersList;
 
     return null;
   }
 
   @override
   Object? visitExtensionDeclaration(dart_ast.ExtensionDeclaration node) {
-    extensionMap.putIfAbsent(node.name?.name ?? '', () {
+    extensionMap.putIfAbsent(node.name?.toString() ?? '', () {
       Extensionz extensionz = Extensionz()
-        ..name = node.name?.name ?? ''
+        ..name = node.name?.toString() ?? ''
         ..uri = _currentVisitUri!;
       if (node.extendedType is dart_ast.NamedType) {
-        extensionz.extendedType =
-            (node.extendedType as dart_ast.NamedType).name.name;
+        extensionz.extendedType = node.extendedType.getName();
       }
       for (final member in node.members) {
         if (member is MethodDeclaration) {
@@ -750,6 +785,7 @@ class Paraphrase {
           visitor.postVisit(result.uri);
         } else {
           for (final AnalysisError error in result.errors) {
+            stderr.writeln('getParsedUnit error:');
             stderr.writeln(error.toString());
           }
         }
