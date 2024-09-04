@@ -14,7 +14,7 @@ import 'package:analyzer/file_system/file_system.dart';
 
 extension _TypeAnnotationExt on TypeAnnotation {
   String getName() {
-    String? returnName = type?.getDisplayString();
+    String? returnName = type?.getDisplayString(withNullability: false);
     if (returnName == null && this is NamedType) {
       return (this as NamedType).name2.toString();
     }
