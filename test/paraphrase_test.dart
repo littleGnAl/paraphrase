@@ -233,7 +233,10 @@ abstract class MyClass {
 
       final method = clazz.methods[0];
       expect(method.returnType.isDartRecords(), isTrue);
-      expect(method.returnType.positionalFields, equals(['int', 'int']));
+      expect(
+        method.returnType.positionalFields.map((e) => e.type).toList(),
+        equals(['int', 'int']),
+      );
     });
 
     test('in function parameter type', () {
@@ -265,7 +268,10 @@ abstract class MyClass {
       final param = method.parameters[0];
       expect(param.name, 'data');
       expect(param.type.isDartRecords(), isTrue);
-      expect(param.type.positionalFields, equals(['int', 'int']));
+      expect(
+        param.type.positionalFields.map((e) => e.type).toList(),
+        equals(['int', 'int']),
+      );
     });
 
     test('in function return type that in type argument', () {
@@ -294,10 +300,16 @@ abstract class MyClass {
       expect(clazz.methods.length, 1);
 
       final method = clazz.methods[0];
-      final param = method.parameters[0];
-      expect(param.name, 'data');
-      expect(param.type.isDartRecords(), isTrue);
-      expect(param.type.positionalFields, equals(['int', 'int']));
+      final returnType = method.returnType;
+      expect(returnType.type, 'Future');
+      expect(returnType.typeArguments.length, 1);
+      expect(returnType.typeArguments[0].positionalFields.length, 2);
+      expect(
+        returnType.typeArguments[0].positionalFields
+            .map((e) => e.type)
+            .toList(),
+        equals(['int', 'int']),
+      );
     });
   });
 }
